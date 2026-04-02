@@ -10,7 +10,6 @@
     --bg: #ffffff; --surface: #f4f4f5; --border: #e4e4e7;
     --text: #18181b; --text-muted: #71717a;
     --green: #16a34a; --red: #dc2626; --blue: #2563eb; --amber: #d97706;
-    --radius: 12px;
   }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
   .header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
@@ -29,14 +28,12 @@
   .call-timer { font-size: 22px; font-weight: 300; font-variant-numeric: tabular-nums; }
   .idle-msg { color: var(--text-muted); font-size: 13px; text-align: center; line-height: 1.6; }
   .dial-area { padding: 12px 16px; border-top: 1px solid var(--border); }
-  .dial-input-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .dial-input-row { display: flex; gap: 8px; }
   .dial-input { flex: 1; height: 38px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; background: var(--surface); color: var(--text); }
   .dial-input:focus { border-color: var(--blue); }
   .btn-dial { width: 38px; height: 38px; border-radius: 8px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; background: var(--green); color: #fff; font-size: 16px; }
-  .btn-dial:disabled { opacity: 0.4; cursor: default; }
   .controls { display: flex; justify-content: center; gap: 12px; padding: 16px; border-top: 1px solid var(--border); }
-  .ctrl-btn { width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: transform 0.1s, opacity 0.15s; }
-  .ctrl-btn:hover { opacity: 0.85; }
+  .ctrl-btn { width: 48px; height: 48px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; }
   .btn-answer { background: var(--green); color: #fff; }
   .btn-hangup { background: var(--red); color: #fff; }
   .btn-mute { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
@@ -48,6 +45,7 @@
   .setup-box label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
   .setup-box input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--bg); color: var(--text); margin-bottom: 10px; }
   .btn-connect { width: 100%; height: 36px; background: var(--blue); color: #fff; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; font-weight: 500; }
+  .debug-box { margin: 8px 16px; padding: 8px 12px; background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; font-size: 11px; color: #92400e; display: none; }
 </style>
 </head>
 <body>
@@ -60,14 +58,14 @@
   </div>
 </div>
 
-<!-- Setup: inserir token do dispositivo -->
 <div id="setup-area" class="setup-box">
   <label>Token do dispositivo (app.wavoip.com)</label>
   <input id="device-token-input" type="text" placeholder="Cole o token do seu dispositivo Wavoip">
   <button class="btn-connect" id="btn-connect">Conectar dispositivo</button>
 </div>
 
-<!-- Screen principal -->
+<div id="debug-box" class="debug-box"></div>
+
 <div class="screen" id="screen" style="display:none">
   <div id="state-idle">
     <p class="idle-msg">Pronto para ligar.<br>Digite um número ou aguarde uma chamada.</p>
@@ -96,26 +94,14 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Socket.IO para relay com o servidor -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
-<!-- SDK Wavoip via unpkg (roda no browser, tem acesso ao WebRTC/navigator) -->
-<script src="https://unpkg.com/@wavoip/wavoip-api/dist/index.umd.js"></script>
+<script src="https://unpkg.com/@wavoip/wavoip-api/dist/index.umd.js" onload="onSdkLoaded()" onerror="onSdkError()"></script>
 
 <script>
 const SERVICE_URL = window.location.origin
-
-// Socket.IO: relay com o servidor (para receber comandos do ZapConnecta)
 const socket = io(SERVICE_URL, { transports: ['websocket'] })
+socket.on('request-call', ({ phone }) => { if (sdkReady) initiateCall(phone) })
 
-// Recebe comando "ligar para X" vindo do servidor (disparado pelo ZapConnecta)
-socket.on('request-call', ({ phone }) => {
-  if (wavoipInstance) initiateCall(phone)
-})
-
-// ---------------------------------------------------------------------------
-// Estado
-// ---------------------------------------------------------------------------
 let wavoipInstance = null
 let wavoipDevice   = null
 let currentOffer   = null
@@ -124,36 +110,75 @@ let callState      = 'idle'
 let isMuted        = false
 let timerInterval  = null
 let timerSeconds   = 0
+let sdkReady       = false
+let WavoipClass    = null
 
 // ---------------------------------------------------------------------------
-// Setup: conectar dispositivo
+// Detectar o global correto do UMD após o script carregar
 // ---------------------------------------------------------------------------
-document.getElementById('btn-connect').onclick = async () => {
+function onSdkLoaded() {
+  // Tenta todos os nomes possíveis que o UMD pode exportar
+  const candidates = [
+    window.WavoipAPI,
+    window.Wavoip,
+    window.wavoipApi,
+    window.WavoipApi,
+    window['wavoip-api'],
+  ]
+
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    // O SDK pode exportar { Wavoip } ou ser a classe diretamente
+    const cls = candidate.Wavoip || candidate.default?.Wavoip || candidate.default || candidate
+    if (typeof cls === 'function') {
+      WavoipClass = cls
+      sdkReady = true
+      console.log('[wavoip-widget] SDK encontrado:', cls.name || 'anon')
+      // Conecta automaticamente se tiver token salvo
+      const saved = localStorage.getItem('wavoip_token')
+      if (saved) {
+        document.getElementById('device-token-input').value = saved
+        connectDevice(saved)
+      }
+      return
+    }
+  }
+
+  // Nao encontrou: mostrar debug
+  const keys = Object.keys(window).filter(k =>
+    k.toLowerCase().includes('wavoip') || k.toLowerCase().includes('wavo')
+  )
+  showDebug(`SDK carregou mas global nao encontrado. Chaves no window: ${keys.join(', ') || 'nenhuma'}`)
+}
+
+function onSdkError() {
+  showDebug('Falha ao carregar o SDK do unpkg. Verifique sua conexao.')
+}
+
+function showDebug(msg) {
+  const el = document.getElementById('debug-box')
+  el.style.display = 'block'
+  el.textContent = msg
+  console.error('[wavoip-widget]', msg)
+}
+
+// ---------------------------------------------------------------------------
+// Conectar dispositivo
+// ---------------------------------------------------------------------------
+document.getElementById('btn-connect').onclick = () => {
   const token = document.getElementById('device-token-input').value.trim()
   if (!token) { toast('Cole o token do dispositivo'); return }
-
-  // Salva token localmente
+  if (!sdkReady) { toast('SDK ainda carregando...'); return }
   localStorage.setItem('wavoip_token', token)
   connectDevice(token)
 }
 
-// Tenta reconectar com token salvo
-window.addEventListener('load', () => {
-  const saved = localStorage.getItem('wavoip_token')
-  if (saved) {
-    document.getElementById('device-token-input').value = saved
-    connectDevice(saved)
-  }
-})
-
 function connectDevice(token) {
   try {
-    // WavoipAPI é o global exposto pelo UMD do SDK
-    wavoipInstance = new WavoipAPI.Wavoip({ tokens: [token] })
+    wavoipInstance = new WavoipClass({ tokens: [token] })
     wavoipDevice   = wavoipInstance.devices[0]
   } catch(e) {
-    toast('Erro ao inicializar SDK Wavoip')
-    console.error(e)
+    showDebug(`Erro ao instanciar SDK: ${e.message}`)
     return
   }
 
@@ -163,13 +188,13 @@ function connectDevice(token) {
     setDeviceStatus(status)
     if (status === 'open') {
       document.getElementById('setup-area').classList.add('hidden')
+      document.getElementById('debug-box').style.display = 'none'
       document.getElementById('screen').style.display = 'flex'
       document.getElementById('dial-area').classList.remove('hidden')
       document.getElementById('controls').classList.remove('hidden')
     }
   })
 
-  // Receber chamadas
   wavoipInstance.onOffer((offer) => {
     currentOffer = offer
     setCallState('incoming', { phone: offer.peer.phone, name: offer.peer.displayName, photo: offer.peer.profilePicture })
@@ -177,8 +202,6 @@ function connectDevice(token) {
     toast(`📞 Ligação de ${offer.peer.displayName || offer.peer.phone}`)
     ring()
     socket.emit('incoming-call', { phone: offer.peer.phone, name: offer.peer.displayName })
-
-    // Timeout 30s sem atender
     const t = setTimeout(() => {
       if (callState === 'incoming') {
         offer.reject()
@@ -191,7 +214,7 @@ function connectDevice(token) {
 }
 
 // ---------------------------------------------------------------------------
-// Botões
+// Botoes
 // ---------------------------------------------------------------------------
 document.getElementById('btn-answer').onclick = async () => {
   if (!currentOffer) return
@@ -208,11 +231,8 @@ document.getElementById('btn-answer').onclick = async () => {
 
 document.getElementById('btn-hangup').onclick = async () => {
   stopRing()
-  if (callState === 'incoming' && currentOffer) {
-    await currentOffer.reject()
-  } else if (activeCall) {
-    await activeCall.end()
-  }
+  if (callState === 'incoming' && currentOffer) await currentOffer.reject()
+  else if (activeCall) await activeCall.end()
   onCallEnd('Encerrada')
 }
 
@@ -228,23 +248,20 @@ document.getElementById('btn-dial').onclick = () => {
   if (phone) initiateCall(phone)
 }
 
-document.getElementById('phone-input').addEventListener('keydown', (e) => {
+document.getElementById('phone-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('btn-dial').click()
 })
 
 // ---------------------------------------------------------------------------
-// Iniciar chamada de saída
+// Chamada de saida
 // ---------------------------------------------------------------------------
 async function initiateCall(phone) {
-  if (!wavoipInstance) { toast('Dispositivo não conectado'); return }
+  if (!wavoipInstance) { toast('Dispositivo nao conectado'); return }
   setCallState('outgoing', { phone, name: phone })
   showButtons({ answer: false, hangup: true, mute: false })
-
   const { call, err } = await wavoipInstance.startCall({ to: phone })
-  if (err) { toast(`Erro: ${err.message}`); setCallState('idle'); showButtons({}); return }
-
+  if (err) { toast(`Erro: ${err.message || err}`); setCallState('idle'); showButtons({}); return }
   socket.emit('call-started', { phone })
-
   call.onPeerAccept((active) => {
     activeCall = active
     setCallState('active')
@@ -253,62 +270,43 @@ async function initiateCall(phone) {
     socket.emit('call-active', { phone })
     attachActiveEvents(active)
   })
-
   call.onPeerReject(() => { toast('Chamada recusada'); onCallEnd('Recusada') })
   call.onUnanswered(() => { toast('Sem resposta'); onCallEnd('Sem resposta'); socket.emit('call-missed', { phone }) })
 }
 
 function attachActiveEvents(call) {
   call.onEnd(() => onCallEnd('Encerrada'))
-  call.onError((e) => { toast(`Erro na chamada: ${e}`); onCallEnd('Erro') })
+  call.onError(e => { toast(`Erro: ${e}`); onCallEnd('Erro') })
 }
 
-// ---------------------------------------------------------------------------
-// postMessage: ZapConnecta envia número para ligar
-// ---------------------------------------------------------------------------
-window.addEventListener('message', (event) => {
-  if (!event.data || typeof event.data !== 'object') return
-  const { type, phone, name } = event.data
-  if (type === 'call' && phone) {
-    document.getElementById('phone-input').value = phone
-    initiateCall(phone.replace(/\D/g, ''))
-  }
-  if (type === 'set-contact' && phone) {
-    document.getElementById('phone-input').value = phone
-  }
+window.addEventListener('message', e => {
+  if (!e.data || typeof e.data !== 'object') return
+  if (e.data.type === 'call' && e.data.phone) initiateCall(e.data.phone.replace(/\D/g,''))
+  if (e.data.type === 'set-contact' && e.data.phone) document.getElementById('phone-input').value = e.data.phone
 })
 
-function postToParent(type, data) {
-  window.parent.postMessage({ source: 'wavoip-widget', type, ...data }, '*')
-}
-
 // ---------------------------------------------------------------------------
-// UI helpers
+// UI
 // ---------------------------------------------------------------------------
 function setDeviceStatus(status) {
   const dot = document.getElementById('dot')
   const label = document.getElementById('device-status')
   dot.className = 'dot'
-  if (status === 'open')       { dot.classList.add('open');       label.textContent = 'Conectado' }
+  if (status === 'open')        { dot.classList.add('open');       label.textContent = 'Conectado' }
   else if (status === 'connecting') { dot.classList.add('connecting'); label.textContent = 'Conectando...' }
-  else if (status === 'error') { dot.classList.add('error');      label.textContent = 'Erro' }
-  else                         { label.textContent = status || 'Desconectado' }
+  else if (status === 'error')  { dot.classList.add('error');      label.textContent = 'Erro' }
+  else                          { label.textContent = status || 'Desconectado' }
 }
 
 function setCallState(state, peer = {}) {
   callState = state
-  const idle = document.getElementById('state-idle')
-  const callDiv = document.getElementById('state-call')
-  idle.classList.toggle('hidden', state !== 'idle')
-  callDiv.classList.toggle('hidden', state === 'idle')
-
+  document.getElementById('state-idle').classList.toggle('hidden', state !== 'idle')
+  document.getElementById('state-call').classList.toggle('hidden', state === 'idle')
   if (state !== 'idle') {
     document.getElementById('peer-name').textContent  = peer.name  || peer.phone || ''
     document.getElementById('peer-phone').textContent = peer.phone !== peer.name ? peer.phone || '' : ''
-    const avatar = document.getElementById('avatar')
-    avatar.innerHTML = peer.photo ? `<img src="${peer.photo}" alt="">` : '📞'
+    document.getElementById('avatar').innerHTML = peer.photo ? `<img src="${peer.photo}" alt="">` : '📞'
   }
-
   const statusMap = { incoming: 'Ligação recebida...', outgoing: 'Chamando...', active: 'Em ligação', idle: '' }
   document.getElementById('call-status').textContent = statusMap[state] || ''
   document.getElementById('call-timer').classList.toggle('hidden', state !== 'active')
@@ -325,11 +323,10 @@ function onCallEnd(reason) {
   stopTimer(); stopRing()
   const phone = currentOffer?.peer?.phone || document.getElementById('phone-input').value
   socket.emit('call-ended', { phone, duration: timerSeconds, reason })
-  postToParent('call-ended', { phone, duration: timerSeconds })
+  window.parent.postMessage({ source: 'wavoip-widget', type: 'call-ended', phone, duration: timerSeconds }, '*')
   toast(`Chamada ${reason.toLowerCase()}`)
   currentOffer = null; activeCall = null; isMuted = false
-  setCallState('idle')
-  showButtons({})
+  setCallState('idle'); showButtons({})
   document.getElementById('btn-mute').classList.remove('active')
 }
 
@@ -337,12 +334,11 @@ function startTimer() {
   timerSeconds = 0
   timerInterval = setInterval(() => {
     timerSeconds++
-    const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0')
-    const s = String(timerSeconds % 60).padStart(2, '0')
+    const m = String(Math.floor(timerSeconds / 60)).padStart(2,'0')
+    const s = String(timerSeconds % 60).padStart(2,'0')
     document.getElementById('call-timer').textContent = `${m}:${s}`
   }, 1000)
 }
-
 function stopTimer() { clearInterval(timerInterval) }
 
 let toastTimeout
@@ -350,24 +346,16 @@ function toast(msg) {
   const el = document.getElementById('toast')
   el.textContent = msg; el.classList.add('show')
   clearTimeout(toastTimeout)
-  toastTimeout = setTimeout(() => el.classList.remove('show'), 3000)
+  toastTimeout = setTimeout(() => el.classList.remove('show'), 3500)
 }
 
 let ringInterval
 function ring() {
   if (!window.AudioContext) return
   const ctx = new AudioContext()
-  const beep = () => {
-    const o = ctx.createOscillator()
-    const g = ctx.createGain()
-    o.connect(g); g.connect(ctx.destination)
-    o.frequency.value = 480; g.gain.value = 0.08
-    o.start(); o.stop(ctx.currentTime + 0.4)
-  }
-  beep()
-  ringInterval = setInterval(beep, 3000)
+  const beep = () => { const o = ctx.createOscillator(); const g = ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.frequency.value = 480; g.gain.value = 0.08; o.start(); o.stop(ctx.currentTime + 0.4) }
+  beep(); ringInterval = setInterval(beep, 3000)
 }
-
 function stopRing() { clearInterval(ringInterval) }
 </script>
 </body>
