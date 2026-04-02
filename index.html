@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Softphone</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #ffffff;
+    --surface: #f4f4f5;
+    --border: #e4e4e7;
+    --text: #18181b;
+    --text-muted: #71717a;
+    --green: #16a34a;
+    --green-light: #dcfce7;
+    --red: #dc2626;
+    --red-light: #fee2e2;
+    --blue: #2563eb;
+    --blue-light: #dbeafe;
+    --amber: #d97706;
+    --radius: 12px;
+    --shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- HEADER ---------- */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .header-title {
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.01em;
+  }
+
+  .device-badge {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #d4d4d8;
+    transition: background 0.3s;
+  }
+  .dot.open   { background: var(--green); }
+  .dot.error  { background: var(--red); }
+  .dot.connecting { background: var(--amber); }
+
+  /* ---------- SCREEN AREA ---------- */
+  .screen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    gap: 16px;
+    min-height: 200px;
+  }
+
+  .avatar {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    font-size: 28px;
+    color: var(--text-muted);
+  }
+
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+  .peer-name {
+    font-weight: 600;
+    font-size: 16px;
+    text-align: center;
+  }
+
+  .peer-phone {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  .call-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .call-timer {
+    font-size: 22px;
+    font-weight: 300;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
+    color: var(--text);
+  }
+
+  .idle-msg {
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  /* ---------- DIAL PAD ---------- */
+  .dial-area {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .dial-input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .dial-input {
+    flex: 1;
+    height: 38px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    background: var(--surface);
+    color: var(--text);
+    transition: border-color 0.15s;
+  }
+  .dial-input:focus { border-color: var(--blue); }
+
+  .btn-dial {
+    width: 38px; height: 38px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--green);
+    color: #fff;
+    font-size: 16px;
+    transition: opacity 0.15s;
+  }
+  .btn-dial:hover { opacity: 0.85; }
+  .btn-dial:disabled { opacity: 0.4; cursor: default; }
+
+  /* ---------- CALL CONTROLS ---------- */
+  .controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .ctrl-btn {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    transition: transform 0.1s, opacity 0.15s;
+  }
+  .ctrl-btn:hover { opacity: 0.85; transform: scale(1.06); }
+  .ctrl-btn:active { transform: scale(0.96); }
+  .ctrl-btn:disabled { opacity: 0.3; cursor: default; transform: none; }
+
+  .btn-answer  { background: var(--green);  color: #fff; }
+  .btn-hangup  { background: var(--red);    color: #fff; }
+  .btn-mute    { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-mute.active { background: var(--amber); color: #fff; border-color: var(--amber); }
+
+  /* ---------- TOAST ---------- */
+  .toast {
+    position: fixed;
+    bottom: 16px; left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: #18181b;
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    transition: transform 0.25s;
+    z-index: 99;
+    white-space: nowrap;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ---------- VISIBILITY HELPERS ---------- */
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <span class="header-title">Telefone</span>
+  <div class="device-badge">
+    <span class="dot" id="dot"></span>
+    <span id="device-status">Conectando...</span>
+  </div>
+</div>
+
+<!-- Screen -->
+<div class="screen" id="screen">
+  <!-- Estado: idle -->
+  <div id="state-idle">
+    <p class="idle-msg">Pronto para ligar.<br>Digite um número abaixo ou aguarde uma chamada.</p>
+  </div>
+
+  <!-- Estado: chamada (recebida, saindo, ativa) -->
+  <div id="state-call" class="hidden" style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+    <div class="avatar" id="avatar">📞</div>
+    <div class="peer-name" id="peer-name"></div>
+    <div class="peer-phone" id="peer-phone"></div>
+    <div class="call-status" id="call-status">Aguardando...</div>
+    <div class="call-timer hidden" id="call-timer">00:00</div>
+  </div>
+</div>
+
+<!-- Dial pad -->
+<div class="dial-area" id="dial-area">
+  <div class="dial-input-row">
+    <input class="dial-input" id="phone-input" type="tel" placeholder="5584999999999" autocomplete="off">
+    <button class="btn-dial" id="btn-dial" title="Ligar">📞</button>
+  </div>
+</div>
+
+<!-- Controles de chamada -->
+<div class="controls" id="controls">
+  <button class="ctrl-btn btn-answer hidden" id="btn-answer" title="Atender">✅</button>
+  <button class="ctrl-btn btn-mute hidden"   id="btn-mute"   title="Mudo">🔇</button>
+  <button class="ctrl-btn btn-hangup hidden" id="btn-hangup" title="Encerrar">📵</button>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Config: ajustar para o seu domínio
+// ---------------------------------------------------------------------------
+const SERVICE_URL = window.WAVOIP_SERVICE_URL || 'https://voip.zapconnecta.com'
+
+// ---------------------------------------------------------------------------
+// Estado local
+// ---------------------------------------------------------------------------
+let currentCallId  = null
+let currentPhone   = null
+let isMuted        = false
+let callState      = 'idle'  // idle | incoming | outgoing | active
+let timerInterval  = null
+let timerSeconds   = 0
+
+// ---------------------------------------------------------------------------
+// Socket.IO
+// ---------------------------------------------------------------------------
+const socket = io(SERVICE_URL, { transports: ['websocket'] })
+
+socket.on('connect',    ()  => setDeviceStatus('connected'))
+socket.on('disconnect', ()  => setDeviceStatus('disconnected'))
+
+// Chamada recebida
+socket.on('incoming-call', ({ callId, phone, name, photo }) => {
+  currentCallId = callId
+  currentPhone  = phone
+  setCallState('incoming', { phone, name, photo })
+  showButtons({ answer: true, hangup: true, mute: false })
+  postToParent('incoming-call', { callId, phone, name })
+  toast(`📞 Ligação de ${name || phone}`)
+  ring()
+})
+
+// Chamada de saída: confirmação
+socket.on('outgoing-call', ({ callId, phone }) => {
+  currentCallId = callId
+  currentPhone  = phone
+  setCallState('outgoing', { phone, name: phone })
+  showButtons({ answer: false, hangup: true, mute: false })
+})
+
+// Chamada conectada (ativa)
+socket.on('call-active', ({ callId }) => {
+  if (callId !== currentCallId) return
+  setCallState('active')
+  showButtons({ answer: false, hangup: true, mute: true })
+  startTimer()
+  postToParent('call-active', { callId, phone: currentPhone })
+})
+
+// Chamada encerrada
+socket.on('call-ended',     ({ callId }) => onCallEnd(callId, 'Encerrada'))
+socket.on('call-rejected',  ({ callId }) => onCallEnd(callId, 'Recusada'))
+socket.on('call-unanswered',({ callId }) => onCallEnd(callId, 'Sem resposta'))
+socket.on('call-missed',    ({ callId }) => { toast('Chamada perdida'); onCallEnd(callId, 'Perdida') })
+
+socket.on('peer-muted',   () => document.getElementById('call-status').textContent = 'Cliente silenciou')
+socket.on('peer-unmuted', () => document.getElementById('call-status').textContent = 'Em ligação')
+
+socket.on('call-error', ({ message }) => {
+  toast(`Erro: ${message}`)
+  onCallEnd(currentCallId, 'Erro')
+})
+
+// ---------------------------------------------------------------------------
+// Botões
+// ---------------------------------------------------------------------------
+document.getElementById('btn-answer').onclick = () => {
+  if (!currentCallId) return
+  socket.emit('accept-call', { callId: currentCallId })
+  stopRing()
+}
+
+document.getElementById('btn-hangup').onclick = () => {
+  if (!currentCallId) return
+  socket.emit(callState === 'incoming' ? 'reject-call' : 'end-call', { callId: currentCallId })
+  stopRing()
+}
+
+document.getElementById('btn-mute').onclick = () => {
+  if (!currentCallId) return
+  isMuted = !isMuted
+  socket.emit(isMuted ? 'mute' : 'unmute', { callId: currentCallId })
+  document.getElementById('btn-mute').classList.toggle('active', isMuted)
+  document.getElementById('btn-mute').title = isMuted ? 'Desmutar' : 'Mudo'
+}
+
+document.getElementById('btn-dial').onclick = () => {
+  const phone = document.getElementById('phone-input').value.trim().replace(/\D/g,'')
+  if (!phone) return
+  initiateCall(phone)
+}
+
+document.getElementById('phone-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('btn-dial').click()
+})
+
+// ---------------------------------------------------------------------------
+// Função pública: iniciar chamada (também acionada via postMessage)
+// ---------------------------------------------------------------------------
+async function initiateCall(phone) {
+  try {
+    const res = await fetch(`${SERVICE_URL}/api/call`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': window.WAVOIP_API_KEY || ''
+      },
+      body: JSON.stringify({ phone })
+    })
+    const data = await res.json()
+    if (data.error) { toast(`Erro: ${data.error}`); return }
+    currentCallId = data.callId
+    currentPhone  = phone
+    setCallState('outgoing', { phone, name: phone })
+    showButtons({ answer: false, hangup: true, mute: false })
+  } catch (e) {
+    toast('Falha ao iniciar chamada')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// postMessage: comunicacao com o ZapConnecta (parent frame)
+// ---------------------------------------------------------------------------
+window.addEventListener('message', (event) => {
+  if (!event.data || typeof event.data !== 'object') return
+  const { type, phone, name } = event.data
+
+  if (type === 'call' && phone) {
+    document.getElementById('phone-input').value = phone
+    initiateCall(phone)
+  }
+
+  if (type === 'set-contact' && phone) {
+    document.getElementById('phone-input').value = phone
+    if (name) document.getElementById('peer-name').textContent = name
+  }
+})
+
+function postToParent(type, data) {
+  window.parent.postMessage({ source: 'wavoip-widget', type, ...data }, '*')
+}
+
+// ---------------------------------------------------------------------------
+// UI helpers
+// ---------------------------------------------------------------------------
+function setDeviceStatus(status) {
+  const dot = document.getElementById('dot')
+  const label = document.getElementById('device-status')
+  dot.className = 'dot'
+  if (status === 'connected') {
+    dot.classList.add('open')
+    label.textContent = 'Conectado'
+  } else {
+    label.textContent = 'Desconectado'
+  }
+}
+
+function setCallState(state, peer = {}) {
+  callState = state
+  const idle = document.getElementById('state-idle')
+  const call = document.getElementById('state-call')
+  const statusEl = document.getElementById('call-status')
+  const timerEl = document.getElementById('call-timer')
+
+  idle.classList.toggle('hidden', state !== 'idle')
+  call.classList.toggle('hidden', state === 'idle')
+
+  if (state !== 'idle') {
+    document.getElementById('peer-name').textContent  = peer.name || peer.phone || ''
+    document.getElementById('peer-phone').textContent = peer.phone !== peer.name ? peer.phone || '' : ''
+
+    const avatar = document.getElementById('avatar')
+    if (peer.photo) {
+      avatar.innerHTML = `<img src="${peer.photo}" alt="">`
+    } else {
+      avatar.textContent = '📞'
+    }
+  }
+
+  const statusMap = {
+    incoming: 'Ligação recebida...',
+    outgoing: 'Chamando...',
+    active:   'Em ligação',
+    idle:     ''
+  }
+  statusEl.textContent = statusMap[state] || ''
+  timerEl.classList.toggle('hidden', state !== 'active')
+
+  // Esconder o dial pad durante chamada
+  document.getElementById('dial-area').classList.toggle('hidden', state !== 'idle')
+}
+
+function showButtons({ answer, hangup, mute }) {
+  document.getElementById('btn-answer').classList.toggle('hidden', !answer)
+  document.getElementById('btn-hangup').classList.toggle('hidden', !hangup)
+  document.getElementById('btn-mute').classList.toggle('hidden', !mute)
+}
+
+function onCallEnd(callId, reason) {
+  if (callId && callId !== currentCallId) return
+  stopTimer()
+  stopRing()
+  toast(`Chamada ${reason.toLowerCase()}`)
+  postToParent('call-ended', { callId: currentCallId, phone: currentPhone, duration: timerSeconds })
+  currentCallId = null
+  currentPhone  = null
+  isMuted = false
+  setCallState('idle')
+  showButtons({ answer: false, hangup: false, mute: false })
+}
+
+// Timer
+function startTimer() {
+  timerSeconds = 0
+  timerInterval = setInterval(() => {
+    timerSeconds++
+    const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0')
+    const s = String(timerSeconds % 60).padStart(2, '0')
+    document.getElementById('call-timer').textContent = `${m}:${s}`
+  }, 1000)
+}
+
+function stopTimer() {
+  clearInterval(timerInterval)
+  document.getElementById('call-timer').textContent = '00:00'
+}
+
+// Toast
+let toastTimeout
+function toast(msg) {
+  const el = document.getElementById('toast')
+  el.textContent = msg
+  el.classList.add('show')
+  clearTimeout(toastTimeout)
+  toastTimeout = setTimeout(() => el.classList.remove('show'), 3000)
+}
+
+// Ring (beep via AudioContext)
+let ringInterval
+function ring() {
+  if (!window.AudioContext) return
+  const ctx = new AudioContext()
+  function beep() {
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.connect(g); g.connect(ctx.destination)
+    o.frequency.value = 480; g.gain.value = 0.1
+    o.start(); o.stop(ctx.currentTime + 0.4)
+  }
+  beep()
+  ringInterval = setInterval(beep, 3000)
+}
+
+function stopRing() { clearInterval(ringInterval) }
+</script>
+</body>
+</html>
